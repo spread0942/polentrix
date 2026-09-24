@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { fetchHealth, streamChat } from './api'
+import ModelsSettings from './ModelsSettings.vue'
 import {
   type Chat,
   createChat,
   loadActiveId,
   loadChats,
+  loadSelectedModel,
   saveActiveId,
   saveChats,
+  saveSelectedModel,
   titleFromMessage,
   uid,
 } from './types'
@@ -18,6 +21,7 @@ const draft = ref('')
 const streaming = ref(false)
 const error = ref<string | null>(null)
 const modelLabel = ref<string>('')
+const view = ref<'chat' | 'models'>('chat')
 const messagesEl = ref<HTMLElement | null>(null)
 let abort: AbortController | null = null
 
@@ -68,6 +72,20 @@ function deleteChat(id: string) {
   persist()
 }
 
+function openModels() {
+  if (streaming.value) return
+  view.value = 'models'
+}
+
+function closeModels() {
+  view.value = 'chat'
+}
+
+function onSelectModel(name: string) {
+  modelLabel.value = name
+  saveSelectedModel(name)
+}
+
 async function send() {
   const text = draft.value.trim()
   if (!text || streaming.value) return
@@ -112,6 +130,7 @@ async function send() {
         }
       },
       abort.signal,
+      modelLabel.value || undefined,
     )
     const msg = assistant()
     if (msg && !msg.content) {
@@ -158,8 +177,17 @@ onMounted(async () => {
     activeId.value = chats.value[0].id
     persist()
   }
+
+  const saved = loadSelectedModel()
+  if (saved) {
+    modelLabel.value = saved
+  }
+
   const health = await fetchHealth()
-  if (health?.model) modelLabel.value = health.model
+  if (!modelLabel.value && health?.model) {
+    modelLabel.value = health.model
+    saveSelectedModel(health.model)
+  }
 })
 </script>
 
@@ -178,9 +206,9 @@ onMounted(async () => {
           :key="chat.id"
           type="button"
           class="chat-item"
-          :class="{ active: chat.id === activeId }"
+          :class="{ active: chat.id === activeId && view === 'chat' }"
           :disabled="streaming"
-          @click="selectChat(chat.id)"
+          @click="selectChat(chat.id); closeModels()"
         >
           <span class="chat-title">{{ chat.title }}</span>
           <span
@@ -190,10 +218,44 @@ onMounted(async () => {
           >×</span>
         </button>
       </nav>
-      <div v-if="modelLabel" class="sidebar-foot">{{ modelLabel }}</div>
+      <div class="sidebar-foot">
+        <div class="model-line">
+          <span class="model-label" :title="modelLabel || 'No model'">{{ modelLabel || '—' }}</span>
+          <button
+            type="button"
+            class="settings-btn"
+            title="Model settings"
+            aria-label="Model settings"
+            :disabled="streaming"
+            :class="{ active: view === 'models' }"
+            @click="openModels"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"
+                stroke="currentColor"
+                stroke-width="1.75"
+              />
+              <path
+                d="M19.4 13a7.7 7.7 0 0 0 .06-2l2.03-1.58-2-3.46-2.4.96a7.6 7.6 0 0 0-1.73-1L15 3h-4l-.36 2.92a7.6 7.6 0 0 0-1.73 1l-2.4-.96-2 3.46L6.54 11a7.7 7.7 0 0 0 0 2l-2.03 1.58 2 3.46 2.4-.96a7.6 7.6 0 0 0 1.73 1L11 21h4l.36-2.92a7.6 7.6 0 0 0 1.73-1l2.4.96 2-3.46L19.4 13Z"
+                stroke="currentColor"
+                stroke-width="1.75"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
+      </div>
     </aside>
 
-    <main class="main">
+    <ModelsSettings
+      v-if="view === 'models'"
+      :selected-model="modelLabel"
+      @back="closeModels"
+      @select="onSelectModel"
+    />
+
+    <main v-else class="main">
       <header class="main-header">
         <h1>{{ activeChat?.title ?? 'Chat' }}</h1>
       </header>
@@ -333,11 +395,58 @@ onMounted(async () => {
 }
 
 .sidebar-foot {
-  padding: 0.75rem 1rem;
+  padding: 0.65rem 0.75rem 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.model-line {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.model-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.75rem;
   color: var(--text-muted);
-  border-top: 1px solid var(--border);
   font-family: var(--mono);
+  padding-left: 0.25rem;
+}
+
+.settings-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0;
+}
+
+.settings-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-elevated);
+  border-color: var(--border);
+}
+
+.settings-btn.active {
+  color: #c8e6c9;
+  background: var(--bg-elevated);
+  border-color: var(--border);
+}
+
+.settings-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .main {

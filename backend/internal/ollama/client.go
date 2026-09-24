@@ -74,6 +74,46 @@ func (c *Client) ListModels(ctx context.Context) (*ListResponse, error) {
 	return &out, nil
 }
 
+type PullRequest struct {
+	Name   string `json:"name"`
+	Stream bool   `json:"stream"`
+}
+
+type PullChunk struct {
+	Status    string `json:"status"`
+	Digest    string `json:"digest,omitempty"`
+	Total     int64  `json:"total,omitempty"`
+	Completed int64  `json:"completed,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// PullStream calls Ollama pull with stream=true and returns the response body for NDJSON progress lines.
+func (c *Client) PullStream(ctx context.Context, name string) (io.ReadCloser, error) {
+	payload := PullRequest{Name: name, Stream: true}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/pull", bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 0}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("ollama pull: %s: %s", resp.Status, string(body))
+	}
+	return resp.Body, nil
+}
+
 // ChatStream calls Ollama chat with stream=true and returns the response body for the caller to read NDJSON lines.
 func (c *Client) ChatStream(ctx context.Context, model string, messages []Message) (io.ReadCloser, error) {
 	payload := ChatRequest{

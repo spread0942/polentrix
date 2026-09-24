@@ -18,6 +18,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", h.Health)
 	mux.HandleFunc("GET /api/models", h.Models)
+	mux.HandleFunc("POST /api/models/pull", h.PullModel)
 	mux.HandleFunc("POST /api/chat", h.Chat)
 
 	addr := ":" + cfg.Port

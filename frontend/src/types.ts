@@ -15,6 +15,16 @@ export interface Chat {
 
 const STORAGE_KEY = 'polentrix.chats'
 const ACTIVE_KEY = 'polentrix.activeChatId'
+const MODEL_KEY = 'polentrix.selectedModel'
+
+export function loadSelectedModel(): string | null {
+  return localStorage.getItem(MODEL_KEY)
+}
+
+export function saveSelectedModel(model: string | null): void {
+  if (model) localStorage.setItem(MODEL_KEY, model)
+  else localStorage.removeItem(MODEL_KEY)
+}
 
 export function uid(): string {
   return crypto.randomUUID()
