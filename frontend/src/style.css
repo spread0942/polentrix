@@ -1,0 +1,52 @@
+:root {
+  --bg: #0f1410;
+  --bg-sidebar: #121a14;
+  --bg-elevated: #1a241c;
+  --border: #2a3a2e;
+  --text: #e8f0ea;
+  --text-muted: #8aa090;
+  --accent: #3d8f5a;
+  --accent-hover: #4aa86b;
+  --user-bubble: #243528;
+  --assistant-bubble: transparent;
+  --danger: #c45c5c;
+  --radius: 10px;
+  --font: "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+  --mono: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}

@@ -1,0 +1,9 @@
+.env
+node_modules/
+dist/
+*.exe
+*.test
+backend/bin/
+.DS_Store
+*.log
+.vite/
