@@ -17,6 +17,8 @@ export interface Chat {
   topP: number | null
   numPredict: number | null
   model: string
+  contextSummary: string
+  summarizedUntil: number
   createdAt: number
   updatedAt: number
 }
@@ -74,6 +76,8 @@ export function loadLegacyChats(): Chat[] {
       topP: c.topP ?? null,
       numPredict: c.numPredict ?? null,
       model: c.model ?? '',
+      contextSummary: '',
+      summarizedUntil: 0,
       createdAt: c.createdAt ?? c.updatedAt ?? Date.now(),
       updatedAt: c.updatedAt ?? Date.now(),
     }))

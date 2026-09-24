@@ -74,6 +74,11 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-polentrix}:${POSTGRES_PASSWORD:-polentrix}@db:5432/${POSTGRES_DB:-polentrix}?sslmode=disable
       DEFAULT_SYSTEM_PROMPT: ${DEFAULT_SYSTEM_PROMPT:-You are Polentrix, a helpful local AI assistant.}
       DEFAULT_TEMPERATURE: ${DEFAULT_TEMPERATURE:-0.7}
+      MEMORY_USER_ID: ${MEMORY_USER_ID:-local}
+      CONTEXT_MAX_TOKENS: ${CONTEXT_MAX_TOKENS:-6000}
+      CONTEXT_KEEP_RECENT: ${CONTEXT_KEEP_RECENT:-12}
+      MEMORY_RETRIEVAL_LIMIT: ${MEMORY_RETRIEVAL_LIMIT:-8}
+      AUTO_EXTRACT_MEMORIES: ${AUTO_EXTRACT_MEMORIES:-true}
     depends_on:
       db:
         condition: service_healthy

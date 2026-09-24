@@ -22,7 +22,7 @@ func main() {
 	defer st.Close()
 
 	client := ollama.NewClient(cfg.OllamaBaseURL)
-	h := handlers.New(client, st, cfg.OllamaModel, cfg.DefaultSystemPrompt, cfg.DefaultTemperature)
+	h := handlers.New(client, st, cfg)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", h.Health)
@@ -39,6 +39,12 @@ func main() {
 	mux.HandleFunc("POST /api/conversations/{id}/messages", h.CreateMessage)
 	mux.HandleFunc("PATCH /api/conversations/{id}/messages/{mid}", h.PatchMessage)
 	mux.HandleFunc("DELETE /api/conversations/{id}/messages/{mid}", h.DeleteMessage)
+
+	mux.HandleFunc("GET /api/memories", h.ListMemories)
+	mux.HandleFunc("POST /api/memories", h.CreateMemory)
+	mux.HandleFunc("GET /api/memories/{id}", h.GetMemory)
+	mux.HandleFunc("PATCH /api/memories/{id}", h.PatchMemory)
+	mux.HandleFunc("DELETE /api/memories/{id}", h.DeleteMemory)
 
 	addr := ":" + cfg.Port
 	log.Printf("listening on %s (ollama=%s model=%s)", addr, cfg.OllamaBaseURL, cfg.OllamaModel)

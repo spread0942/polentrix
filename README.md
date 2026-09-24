@@ -14,6 +14,11 @@ Local ChatGPT-style chatbot powered by [Ollama](https://ollama.com/), with a Vue
 
 Conversations and messages are stored in Postgres (`DATABASE_URL`). The UI migrates any older `localStorage` chats once on first load.
 
+## Memory (Phase 2)
+
+- **Short-term:** when a conversation exceeds the context budget (`CONTEXT_MAX_TOKENS`), older turns are summarized server-side; recent messages stay verbatim and the summary is injected into the system prompt.
+- **Long-term:** durable facts are stored in Postgres as user-scoped or conversation-scoped memories (`MEMORY_USER_ID`). Relevant memories are retrieved (keyword overlap) and injected before generation. Inspect/edit/delete them from **Memories** in the UI. Optional auto-extract after each turn (`AUTO_EXTRACT_MEMORIES`).
+
 ## Requirements
 
 - Docker + Docker Compose
@@ -88,7 +93,9 @@ OLLAMA_BASE_URL=http://ollama.localhost OLLAMA_MODEL=qwen2.5:0.5b go run ./cmd/a
 
 - `GET /health` — status + configured model
 - `GET /api/models` — models known to Ollama + default
-- `POST /api/chat` — body `{ "messages": [{ "role", "content" }] }`, response is SSE:
+- `POST /api/chat` — body `{ "conversation_id"?, "messages"?, "model"?, "options"? }`, response is SSE. When `conversation_id` is set, the server assembles context (summary + memories + recent messages).
+- `GET/POST /api/memories` — list/create long-term memories (`?conversation_id=&scope=user|conversation|all`)
+- `GET/PATCH/DELETE /api/memories/{id}` — inspect/edit/delete (scoped to `MEMORY_USER_ID`)
 
 ```
 data: {"content":"Hello","done":false,"role":"assistant"}
@@ -108,7 +115,6 @@ polentrix/
 
 ## Later
 
-- Persist chats in Postgres via the Go API
 - Auth / multi-user
 - Worker for RAG or file processing
 - Larger Qwen (or other) models as your hardware allows

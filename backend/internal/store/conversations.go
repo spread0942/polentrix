@@ -9,16 +9,18 @@ import (
 var ErrNotFound = errors.New("not found")
 
 type Conversation struct {
-	ID           string    `json:"id"`
-	Title        string    `json:"title"`
-	SystemPrompt string    `json:"system_prompt"`
-	Temperature  *float64  `json:"temperature"`
-	TopP         *float64  `json:"top_p"`
-	NumPredict   *int      `json:"num_predict"`
-	Model        string    `json:"model"`
-	CreatedAt    int64     `json:"created_at"`
-	UpdatedAt    int64     `json:"updated_at"`
-	Messages     []Message `json:"messages,omitempty"`
+	ID              string    `json:"id"`
+	Title           string    `json:"title"`
+	SystemPrompt    string    `json:"system_prompt"`
+	Temperature     *float64  `json:"temperature"`
+	TopP            *float64  `json:"top_p"`
+	NumPredict      *int      `json:"num_predict"`
+	Model           string    `json:"model"`
+	ContextSummary  string    `json:"context_summary"`
+	SummarizedUntil int       `json:"summarized_until"`
+	CreatedAt       int64     `json:"created_at"`
+	UpdatedAt       int64     `json:"updated_at"`
+	Messages        []Message `json:"messages,omitempty"`
 }
 
 type Message struct {
@@ -32,7 +34,8 @@ type Message struct {
 
 func (s *Store) ListConversations() ([]Conversation, error) {
 	rows, err := s.db.Query(`
-		SELECT id, title, system_prompt, temperature, top_p, num_predict, model, created_at, updated_at
+		SELECT id, title, system_prompt, temperature, top_p, num_predict, model,
+			context_summary, summarized_until, created_at, updated_at
 		FROM conversations
 		ORDER BY updated_at DESC
 	`)
@@ -54,7 +57,8 @@ func (s *Store) ListConversations() ([]Conversation, error) {
 
 func (s *Store) GetConversation(id string, withMessages bool) (*Conversation, error) {
 	row := s.db.QueryRow(`
-		SELECT id, title, system_prompt, temperature, top_p, num_predict, model, created_at, updated_at
+		SELECT id, title, system_prompt, temperature, top_p, num_predict, model,
+			context_summary, summarized_until, created_at, updated_at
 		FROM conversations WHERE id = $1
 	`, id)
 
@@ -92,9 +96,13 @@ func (s *Store) CreateConversation(c Conversation) (*Conversation, error) {
 	}
 
 	_, err := s.db.Exec(`
-		INSERT INTO conversations (id, title, system_prompt, temperature, top_p, num_predict, model, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, c.ID, c.Title, c.SystemPrompt, c.Temperature, c.TopP, c.NumPredict, c.Model, c.CreatedAt, c.UpdatedAt)
+		INSERT INTO conversations (
+			id, title, system_prompt, temperature, top_p, num_predict, model,
+			context_summary, summarized_until, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`, c.ID, c.Title, c.SystemPrompt, c.Temperature, c.TopP, c.NumPredict, c.Model,
+		c.ContextSummary, c.SummarizedUntil, c.CreatedAt, c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -117,9 +125,11 @@ func (s *Store) UpdateConversation(c Conversation) (*Conversation, error) {
 
 	_, err := s.db.Exec(`
 		UPDATE conversations
-		SET title = $1, system_prompt = $2, temperature = $3, top_p = $4, num_predict = $5, model = $6, updated_at = $7
-		WHERE id = $8
-	`, c.Title, c.SystemPrompt, c.Temperature, c.TopP, c.NumPredict, c.Model, c.UpdatedAt, c.ID)
+		SET title = $1, system_prompt = $2, temperature = $3, top_p = $4, num_predict = $5, model = $6,
+			context_summary = $7, summarized_until = $8, updated_at = $9
+		WHERE id = $10
+	`, c.Title, c.SystemPrompt, c.Temperature, c.TopP, c.NumPredict, c.Model,
+		c.ContextSummary, c.SummarizedUntil, c.UpdatedAt, c.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +271,8 @@ func scanConversation(row rowScanner) (Conversation, error) {
 	err := row.Scan(
 		&c.ID, &c.Title, &c.SystemPrompt,
 		&temp, &topP, &numPredict,
-		&c.Model, &c.CreatedAt, &c.UpdatedAt,
+		&c.Model, &c.ContextSummary, &c.SummarizedUntil,
+		&c.CreatedAt, &c.UpdatedAt,
 	)
 	if err != nil {
 		return c, err
@@ -279,4 +290,14 @@ func scanConversation(row rowScanner) (Conversation, error) {
 		c.NumPredict = &v
 	}
 	return c, nil
+}
+
+// UpdateContextSummary persists a short-term conversation summary.
+func (s *Store) UpdateContextSummary(id, summary string, summarizedUntil int) error {
+	_, err := s.db.Exec(`
+		UPDATE conversations
+		SET context_summary = $1, summarized_until = $2, updated_at = $3
+		WHERE id = $4
+	`, summary, summarizedUntil, nowMS(), id)
+	return err
 }

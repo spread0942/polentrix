@@ -12,6 +12,13 @@ type Config struct {
 	DatabaseURL         string
 	DefaultSystemPrompt string
 	DefaultTemperature  float64
+
+	// Memory / context window (Phase 2)
+	MemoryUserID           string
+	ContextMaxTokens       int
+	ContextKeepRecent      int
+	MemoryRetrievalLimit   int
+	AutoExtractMemories    bool
 }
 
 func Load() Config {
@@ -22,6 +29,12 @@ func Load() Config {
 		DatabaseURL:         getenv("DATABASE_URL", "postgres://polentrix:polentrix@localhost:5432/polentrix?sslmode=disable"),
 		DefaultSystemPrompt: getenv("DEFAULT_SYSTEM_PROMPT", "You are Polentrix, a helpful local AI assistant."),
 		DefaultTemperature:  getenvFloat("DEFAULT_TEMPERATURE", 0.7),
+
+		MemoryUserID:         getenv("MEMORY_USER_ID", "local"),
+		ContextMaxTokens:     getenvInt("CONTEXT_MAX_TOKENS", 6000),
+		ContextKeepRecent:    getenvInt("CONTEXT_KEEP_RECENT", 12),
+		MemoryRetrievalLimit: getenvInt("MEMORY_RETRIEVAL_LIMIT", 8),
+		AutoExtractMemories:  getenvBool("AUTO_EXTRACT_MEMORIES", true),
 	}
 }
 
@@ -42,4 +55,28 @@ func getenvFloat(key string, fallback float64) float64 {
 		return fallback
 	}
 	return f
+}
+
+func getenvInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func getenvBool(key string, fallback bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
+	}
+	return b
 }

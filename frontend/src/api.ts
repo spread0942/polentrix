@@ -51,6 +51,8 @@ export interface ApiConversation {
   top_p: number | null
   num_predict: number | null
   model: string
+  context_summary?: string
+  summarized_until?: number
   created_at: number
   updated_at: number
   messages?: ApiMessage[]
@@ -126,10 +128,17 @@ export async function streamChat(
   signal?: AbortSignal,
   model?: string,
   options?: ChatOptions,
+  conversationId?: string,
 ): Promise<void> {
-  const body: { messages: ChatMessage[]; model?: string; options?: ChatOptions } = { messages }
+  const body: {
+    messages: ChatMessage[]
+    model?: string
+    options?: ChatOptions
+    conversation_id?: string
+  } = { messages }
   if (model) body.model = model
   if (options) body.options = options
+  if (conversationId) body.conversation_id = conversationId
 
   const res = await fetch(`${apiBase()}/api/chat`, {
     method: 'POST',
@@ -287,6 +296,55 @@ export async function patchConversation(
 
 export async function deleteConversation(id: string): Promise<void> {
   const res = await fetch(`${apiBase()}/api/conversations/${id}`, { method: 'DELETE' })
+  await readJSON<void>(res)
+}
+
+export interface ApiMemory {
+  id: string
+  user_id: string
+  conversation_id: string | null
+  content: string
+  created_at: number
+  updated_at: number
+}
+
+export async function listMemories(opts?: {
+  conversationId?: string
+  scope?: 'user' | 'conversation' | 'all'
+}): Promise<ApiMemory[]> {
+  const params = new URLSearchParams()
+  if (opts?.conversationId) params.set('conversation_id', opts.conversationId)
+  if (opts?.scope) params.set('scope', opts.scope)
+  const qs = params.toString()
+  const res = await fetch(`${apiBase()}/api/memories${qs ? `?${qs}` : ''}`)
+  const data = await readJSON<{ memories: ApiMemory[] }>(res)
+  return data.memories ?? []
+}
+
+export async function createMemory(body: {
+  id: string
+  content: string
+  conversation_id?: string | null
+}): Promise<ApiMemory> {
+  const res = await fetch(`${apiBase()}/api/memories`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return readJSON<ApiMemory>(res)
+}
+
+export async function patchMemory(id: string, content: string): Promise<ApiMemory> {
+  const res = await fetch(`${apiBase()}/api/memories/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  })
+  return readJSON<ApiMemory>(res)
+}
+
+export async function deleteMemory(id: string): Promise<void> {
+  const res = await fetch(`${apiBase()}/api/memories/${id}`, { method: 'DELETE' })
   await readJSON<void>(res)
 }
 

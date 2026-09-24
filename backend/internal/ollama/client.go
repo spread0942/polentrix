@@ -124,6 +124,50 @@ func (c *Client) PullStream(ctx context.Context, name string) (io.ReadCloser, er
 	return resp.Body, nil
 }
 
+// Chat calls Ollama chat with stream=false and returns the assistant message.
+func (c *Client) Chat(ctx context.Context, model string, messages []Message, opts *Options) (Message, error) {
+	payload := ChatRequest{
+		Model:    model,
+		Messages: messages,
+		Stream:   false,
+		Options:  opts,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return Message{}, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/chat", bytes.NewReader(data))
+	if err != nil {
+		return Message{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return Message{}, fmt.Errorf("cannot reach Ollama at %s: %w", c.baseURL, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return Message{}, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return Message{}, friendlyChatError(resp.StatusCode, string(body), model)
+	}
+
+	var chunk ChatChunk
+	if err := json.Unmarshal(body, &chunk); err != nil {
+		return Message{}, err
+	}
+	if chunk.Error != "" {
+		return Message{}, fmt.Errorf("%s", chunk.Error)
+	}
+	return chunk.Message, nil
+}
+
 // ChatStream calls Ollama chat with stream=true and returns the response body for the caller to read NDJSON lines.
 func (c *Client) ChatStream(ctx context.Context, model string, messages []Message, opts *Options) (io.ReadCloser, error) {
 	payload := ChatRequest{

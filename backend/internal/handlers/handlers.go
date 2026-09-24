@@ -2,13 +2,17 @@ package handlers
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/polentrix/backend/internal/config"
+	"github.com/polentrix/backend/internal/memory"
 	"github.com/polentrix/backend/internal/ollama"
 	"github.com/polentrix/backend/internal/store"
 )
@@ -52,18 +56,33 @@ var promptPresets = []map[string]string{
 type Handler struct {
 	client              *ollama.Client
 	store               *store.Store
+	assembler           *memory.Assembler
 	model               string
 	defaultSystemPrompt string
 	defaultTemperature  float64
+	memoryUserID        string
 }
 
-func New(client *ollama.Client, st *store.Store, model, defaultSystemPrompt string, defaultTemperature float64) *Handler {
+func New(client *ollama.Client, st *store.Store, cfg config.Config) *Handler {
+	assembler := &memory.Assembler{
+		Store:  st,
+		Client: client,
+		Cfg: memory.Config{
+			MaxTokens:      cfg.ContextMaxTokens,
+			KeepRecent:     cfg.ContextKeepRecent,
+			RetrievalLimit: cfg.MemoryRetrievalLimit,
+			UserID:         cfg.MemoryUserID,
+			AutoExtract:    cfg.AutoExtractMemories,
+		},
+	}
 	return &Handler{
 		client:              client,
 		store:               st,
-		model:               model,
-		defaultSystemPrompt: defaultSystemPrompt,
-		defaultTemperature:  defaultTemperature,
+		assembler:           assembler,
+		model:               cfg.OllamaModel,
+		defaultSystemPrompt: cfg.DefaultSystemPrompt,
+		defaultTemperature:  cfg.DefaultTemperature,
+		memoryUserID:        cfg.MemoryUserID,
 	}
 }
 
@@ -224,19 +243,16 @@ func (h *Handler) PullModel(w http.ResponseWriter, r *http.Request) {
 }
 
 type chatBody struct {
-	Messages []ollama.Message `json:"messages"`
-	Model    string           `json:"model,omitempty"`
-	Options  *ollama.Options  `json:"options,omitempty"`
+	Messages       []ollama.Message `json:"messages"`
+	ConversationID string           `json:"conversation_id,omitempty"`
+	Model          string           `json:"model,omitempty"`
+	Options        *ollama.Options  `json:"options,omitempty"`
 }
 
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	var body chatBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
-		return
-	}
-	if len(body.Messages) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "messages required"})
 		return
 	}
 
@@ -251,7 +267,29 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		opts = &ollama.Options{Temperature: &t}
 	}
 
-	stream, err := h.client.ChatStream(r.Context(), model, body.Messages, opts)
+	messages := body.Messages
+	convID := strings.TrimSpace(body.ConversationID)
+	var lastUser string
+	if convID != "" {
+		assembled, err := h.assembler.Assemble(r.Context(), convID, model)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		messages = assembled.Messages
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == "user" {
+				lastUser = messages[i].Content
+				break
+			}
+		}
+	}
+	if len(messages) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "messages or conversation_id required"})
+		return
+	}
+
+	stream, err := h.client.ChatStream(r.Context(), model, messages, opts)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
@@ -274,6 +312,8 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	scanner := bufio.NewScanner(stream)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
+	var assistantBuf strings.Builder
+
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -293,6 +333,10 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "data: %s\n\n", mustJSON(map[string]string{"error": msg}))
 			flusher.Flush()
 			break
+		}
+
+		if chunk.Message.Content != "" {
+			assistantBuf.WriteString(chunk.Message.Content)
 		}
 
 		payload := map[string]any{
@@ -315,6 +359,14 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+
+	if convID != "" && lastUser != "" && assistantBuf.Len() > 0 {
+		go func() {
+			bg, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			h.assembler.PersistExtractedMemories(bg, convID, model, lastUser, assistantBuf.String())
+		}()
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

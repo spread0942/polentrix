@@ -14,6 +14,7 @@ import {
   type ChatOptions,
 } from './api'
 import ChatSettings from './ChatSettings.vue'
+import MemoryPanel from './MemoryPanel.vue'
 import ModelsSettings from './ModelsSettings.vue'
 import {
   type Chat,
@@ -38,6 +39,7 @@ const error = ref<string | null>(null)
 const modelLabel = ref('')
 const view = ref<'chat' | 'models'>('chat')
 const showSettings = ref(false)
+const showMemories = ref(false)
 const renamingId = ref<string | null>(null)
 const renameDraft = ref('')
 const defaultSystemPrompt = ref('You are Polentrix, a helpful local AI assistant.')
@@ -60,6 +62,8 @@ function fromApi(c: ApiConversation): Chat {
     topP: c.top_p,
     numPredict: c.num_predict,
     model: c.model ?? '',
+    contextSummary: c.context_summary ?? '',
+    summarizedUntil: c.summarized_until ?? 0,
     createdAt: c.created_at,
     updatedAt: c.updated_at,
     messages: (c.messages ?? []).map(
@@ -152,6 +156,7 @@ async function newChat() {
   draft.value = ''
   error.value = null
   showSettings.value = false
+  showMemories.value = false
   persistActive()
 }
 
@@ -160,6 +165,7 @@ async function selectChat(id: string) {
   activeId.value = id
   error.value = null
   showSettings.value = false
+  showMemories.value = false
   persistActive()
   try {
     await ensureActiveLoaded()
@@ -219,6 +225,7 @@ function openModels() {
   if (streaming.value) return
   view.value = 'models'
   showSettings.value = false
+  showMemories.value = false
 }
 
 function closeModels() {
@@ -260,6 +267,18 @@ async function saveSettings(payload: {
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Failed to save settings'
   }
+}
+
+function openMemories() {
+  if (!activeChat.value || streaming.value) return
+  showMemories.value = !showMemories.value
+  if (showMemories.value) showSettings.value = false
+}
+
+function openPromptSettings() {
+  if (!activeChat.value || streaming.value) return
+  showSettings.value = !showSettings.value
+  if (showSettings.value) showMemories.value = false
 }
 
 async function migrateLegacyIfNeeded() {
@@ -353,6 +372,7 @@ async function send() {
       abort.signal,
       modelLabel.value || undefined,
       chatOptions(chat),
+      chat.id,
     )
     const msg = assistant()
     if (msg && !msg.content) {
@@ -360,6 +380,13 @@ async function send() {
     }
     if (msg) {
       await patchMessage(chat.id, assistantId, msg.content)
+    }
+    try {
+      const full = await getConversation(chat.id)
+      chat.contextSummary = full.context_summary ?? ''
+      chat.summarizedUntil = full.summarized_until ?? 0
+    } catch {
+      /* ignore summary refresh */
     }
   } catch (e) {
     const msg = assistant()
@@ -448,7 +475,12 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="layout" :class="{ 'with-settings': showSettings && view === 'chat' }">
+  <div
+    class="layout"
+    :class="{
+      'with-settings': (showSettings || showMemories) && view === 'chat',
+    }"
+  >
     <aside class="sidebar">
       <div class="sidebar-top">
         <div class="brand">Polentrix</div>
@@ -530,15 +562,26 @@ onMounted(async () => {
       <main class="main">
         <header class="main-header">
           <h1>{{ activeChat?.title ?? 'Chat' }}</h1>
-          <button
-            type="button"
-            class="header-btn"
-            :disabled="!activeChat || streaming"
-            :class="{ active: showSettings }"
-            @click="showSettings = !showSettings"
-          >
-            Prompt &amp; params
-          </button>
+          <div class="header-actions">
+            <button
+              type="button"
+              class="header-btn"
+              :disabled="!activeChat || streaming"
+              :class="{ active: showMemories }"
+              @click="openMemories"
+            >
+              Memories
+            </button>
+            <button
+              type="button"
+              class="header-btn"
+              :disabled="!activeChat || streaming"
+              :class="{ active: showSettings }"
+              @click="openPromptSettings"
+            >
+              Prompt &amp; params
+            </button>
+          </div>
         </header>
 
         <div ref="messagesEl" class="messages">
@@ -604,6 +647,13 @@ onMounted(async () => {
         :default-system-prompt="defaultSystemPrompt"
         @close="showSettings = false"
         @save="saveSettings"
+      />
+
+      <MemoryPanel
+        v-else-if="showMemories && activeChat"
+        :conversation-id="activeChat.id"
+        :context-summary="activeChat.contextSummary"
+        @close="showMemories = false"
       />
     </template>
   </div>
@@ -812,6 +862,13 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
 }
 
 .header-btn {

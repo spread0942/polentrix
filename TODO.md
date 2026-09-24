@@ -59,22 +59,22 @@ Goal: allow the assistant to retain useful information beyond a single conversat
 
 ### Short-term memory
 
-* [ ] Manage conversation context window
-* [ ] Detect when conversation becomes too large
-* [ ] Summarize older messages
-* [ ] Keep recent messages verbatim
-* [ ] Inject the summary into the context
+* [x] Manage conversation context window
+* [x] Detect when conversation becomes too large
+* [x] Summarize older messages
+* [x] Keep recent messages verbatim
+* [x] Inject the summary into the context
 
 ### Long-term memory
 
-* [ ] Define a memory data model
-* [ ] Store user-specific memories
-* [ ] Store conversation-specific memories
-* [ ] Retrieve relevant memories before generating a response
-* [ ] Inject memories into the LLM context
-* [ ] Allow users to inspect stored memories
-* [ ] Allow users to edit/delete memories
-* [ ] Ensure strict user/session isolation
+* [x] Define a memory data model
+* [x] Store user-specific memories
+* [x] Store conversation-specific memories
+* [x] Retrieve relevant memories before generating a response
+* [x] Inject memories into the LLM context
+* [x] Allow users to inspect stored memories
+* [x] Allow users to edit/delete memories
+* [x] Ensure strict user/session isolation
 
 Example:
 
