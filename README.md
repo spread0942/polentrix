@@ -27,11 +27,12 @@ docker compose up --build
 
 On first boot, `ollama-init` pulls `qwen2.5:0.5b` (can take a few minutes).
 
-Then open:
+Then open (via Traefik on port 80):
 
-- UI: http://localhost:3000
-- API health: http://localhost:8080/health
-- Ollama: http://localhost:11434
+- UI: http://localhost or http://web.localhost
+- API health: http://api.localhost/health
+- Ollama: http://ollama.localhost
+- Traefik dashboard: http://traefik.localhost
 
 ## Models
 
@@ -59,10 +60,10 @@ docker compose up -d api
 
 ## Local development (without rebuilding web)
 
-1. Start Ollama + API:
+1. Start Traefik + Ollama + API:
 
 ```bash
-docker compose up ollama ollama-init api
+docker compose up traefik ollama ollama-init api
 ```
 
 2. In another terminal:
@@ -73,13 +74,13 @@ npm install
 npm run dev
 ```
 
-Vite serves http://localhost:5173 and proxies `/api` and `/health` to `localhost:8080`.
+Vite serves http://localhost:5173 and proxies `/api` and `/health` to `http://api.localhost` (Traefik).
 
 Run the API on the host instead:
 
 ```bash
 cd backend
-OLLAMA_BASE_URL=http://localhost:11434 OLLAMA_MODEL=qwen2.5:0.5b go run ./cmd/api
+OLLAMA_BASE_URL=http://ollama.localhost OLLAMA_MODEL=qwen2.5:0.5b go run ./cmd/api
 ```
 
 ## API
