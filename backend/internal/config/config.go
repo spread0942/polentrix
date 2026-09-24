@@ -1,18 +1,27 @@
 package config
 
-import "os"
+import (
+	"os"
+	"strconv"
+)
 
 type Config struct {
-	Port          string
-	OllamaBaseURL string
-	OllamaModel   string
+	Port                string
+	OllamaBaseURL       string
+	OllamaModel         string
+	DatabaseURL         string
+	DefaultSystemPrompt string
+	DefaultTemperature  float64
 }
 
 func Load() Config {
 	return Config{
-		Port:          getenv("PORT", "8080"),
-		OllamaBaseURL: getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-		OllamaModel:   getenv("OLLAMA_MODEL", "qwen2.5:0.5b"),
+		Port:                getenv("PORT", "8080"),
+		OllamaBaseURL:       getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+		OllamaModel:         getenv("OLLAMA_MODEL", "qwen2.5:0.5b"),
+		DatabaseURL:         getenv("DATABASE_URL", "postgres://polentrix:polentrix@localhost:5432/polentrix?sslmode=disable"),
+		DefaultSystemPrompt: getenv("DEFAULT_SYSTEM_PROMPT", "You are Polentrix, a helpful local AI assistant."),
+		DefaultTemperature:  getenvFloat("DEFAULT_TEMPERATURE", 0.7),
 	}
 }
 
@@ -21,4 +30,16 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getenvFloat(key string, fallback float64) float64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return fallback
+	}
+	return f
 }

@@ -30,9 +30,59 @@ export interface PullProgress {
   error?: string
 }
 
+export interface ChatOptions {
+  temperature?: number
+  top_p?: number
+  top_k?: number
+  num_predict?: number
+}
+
+export interface PromptPreset {
+  id: string
+  name: string
+  prompt: string
+}
+
+export interface ApiConversation {
+  id: string
+  title: string
+  system_prompt: string
+  temperature: number | null
+  top_p: number | null
+  num_predict: number | null
+  model: string
+  created_at: number
+  updated_at: number
+  messages?: ApiMessage[]
+}
+
+export interface ApiMessage {
+  id: string
+  conversation_id?: string
+  role: string
+  content: string
+  created_at: number
+  position: number
+}
+
 function apiBase(): string {
   const base = import.meta.env.VITE_API_BASE_URL
   return base === undefined || base === null ? '' : base.replace(/\/$/, '')
+}
+
+async function readJSON<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    let detail = res.statusText
+    try {
+      const err = (await res.json()) as { error?: string }
+      if (err.error) detail = err.error
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail || `Request failed (${res.status})`)
+  }
+  if (res.status === 204) return undefined as T
+  return (await res.json()) as T
 }
 
 async function readSSE(
@@ -75,9 +125,11 @@ export async function streamChat(
   onChunk: (chunk: StreamChunk) => void,
   signal?: AbortSignal,
   model?: string,
+  options?: ChatOptions,
 ): Promise<void> {
-  const body: { messages: ChatMessage[]; model?: string } = { messages }
+  const body: { messages: ChatMessage[]; model?: string; options?: ChatOptions } = { messages }
   if (model) body.model = model
+  if (options) body.options = options
 
   const res = await fetch(`${apiBase()}/api/chat`, {
     method: 'POST',
@@ -113,11 +165,21 @@ export async function streamChat(
   )
 }
 
-export async function fetchHealth(): Promise<{ status: string; model: string } | null> {
+export async function fetchHealth(): Promise<{
+  status: string
+  model: string
+  default_system_prompt?: string
+  default_temperature?: number
+} | null> {
   try {
     const res = await fetch(`${apiBase()}/health`)
     if (!res.ok) return null
-    return (await res.json()) as { status: string; model: string }
+    return (await res.json()) as {
+      status: string
+      model: string
+      default_system_prompt?: string
+      default_temperature?: number
+    }
   } catch {
     return null
   }
@@ -130,6 +192,17 @@ export async function fetchModels(): Promise<ModelsResponse | null> {
     return (await res.json()) as ModelsResponse
   } catch {
     return null
+  }
+}
+
+export async function fetchPromptPresets(): Promise<PromptPreset[]> {
+  try {
+    const res = await fetch(`${apiBase()}/api/prompt-presets`)
+    if (!res.ok) return []
+    const data = (await res.json()) as { presets: PromptPreset[] }
+    return data.presets ?? []
+  } catch {
+    return []
   }
 }
 
@@ -170,4 +243,77 @@ export async function pullModel(
     },
     signal,
   )
+}
+
+export async function listConversations(): Promise<ApiConversation[]> {
+  const res = await fetch(`${apiBase()}/api/conversations`)
+  const data = await readJSON<{ conversations: ApiConversation[] }>(res)
+  return data.conversations ?? []
+}
+
+export async function getConversation(id: string): Promise<ApiConversation> {
+  const res = await fetch(`${apiBase()}/api/conversations/${id}`)
+  return readJSON<ApiConversation>(res)
+}
+
+export async function createConversation(body: {
+  id: string
+  title?: string
+  system_prompt?: string
+  temperature?: number | null
+  top_p?: number | null
+  num_predict?: number | null
+  model?: string
+}): Promise<ApiConversation> {
+  const res = await fetch(`${apiBase()}/api/conversations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return readJSON<ApiConversation>(res)
+}
+
+export async function patchConversation(
+  id: string,
+  body: Record<string, unknown>,
+): Promise<ApiConversation> {
+  const res = await fetch(`${apiBase()}/api/conversations/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return readJSON<ApiConversation>(res)
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  const res = await fetch(`${apiBase()}/api/conversations/${id}`, { method: 'DELETE' })
+  await readJSON<void>(res)
+}
+
+export async function createMessage(
+  conversationId: string,
+  body: { id: string; role: string; content: string },
+): Promise<ApiMessage> {
+  const res = await fetch(`${apiBase()}/api/conversations/${conversationId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return readJSON<ApiMessage>(res)
+}
+
+export async function patchMessage(
+  conversationId: string,
+  messageId: string,
+  content: string,
+): Promise<ApiMessage> {
+  const res = await fetch(
+    `${apiBase()}/api/conversations/${conversationId}/messages/${messageId}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    },
+  )
+  return readJSON<ApiMessage>(res)
 }

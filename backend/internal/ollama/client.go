@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -15,10 +16,19 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+// Options maps to Ollama's chat "options" object.
+type Options struct {
+	Temperature *float64 `json:"temperature,omitempty"`
+	TopP        *float64 `json:"top_p,omitempty"`
+	TopK        *int     `json:"top_k,omitempty"`
+	NumPredict  *int     `json:"num_predict,omitempty"`
+}
+
 type ChatRequest struct {
 	Model    string    `json:"model"`
 	Messages []Message `json:"messages"`
 	Stream   bool      `json:"stream"`
+	Options  *Options  `json:"options,omitempty"`
 }
 
 type ChatChunk struct {
@@ -60,7 +70,7 @@ func (c *Client) ListModels(ctx context.Context) (*ListResponse, error) {
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cannot reach Ollama at %s: %w", c.baseURL, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -104,7 +114,7 @@ func (c *Client) PullStream(ctx context.Context, name string) (io.ReadCloser, er
 	client := &http.Client{Timeout: 0}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cannot reach Ollama at %s: %w", c.baseURL, err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -115,11 +125,12 @@ func (c *Client) PullStream(ctx context.Context, name string) (io.ReadCloser, er
 }
 
 // ChatStream calls Ollama chat with stream=true and returns the response body for the caller to read NDJSON lines.
-func (c *Client) ChatStream(ctx context.Context, model string, messages []Message) (io.ReadCloser, error) {
+func (c *Client) ChatStream(ctx context.Context, model string, messages []Message, opts *Options) (io.ReadCloser, error) {
 	payload := ChatRequest{
 		Model:    model,
 		Messages: messages,
 		Stream:   true,
+		Options:  opts,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -135,12 +146,24 @@ func (c *Client) ChatStream(ctx context.Context, model string, messages []Messag
 	client := &http.Client{Timeout: 10 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cannot reach Ollama at %s: %w", c.baseURL, err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("ollama chat: %s: %s", resp.Status, string(body))
+		return nil, friendlyChatError(resp.StatusCode, string(body), model)
 	}
 	return resp.Body, nil
+}
+
+func friendlyChatError(status int, body, model string) error {
+	lower := strings.ToLower(body)
+	switch {
+	case strings.Contains(lower, "not found") || strings.Contains(lower, "pull"):
+		return fmt.Errorf("model %q is not available — pull it in Model settings first", model)
+	case status == http.StatusBadGateway || status == http.StatusServiceUnavailable:
+		return fmt.Errorf("Ollama is unavailable (%d): %s", status, strings.TrimSpace(body))
+	default:
+		return fmt.Errorf("ollama chat: %d: %s", status, strings.TrimSpace(body))
+	}
 }

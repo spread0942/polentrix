@@ -24,32 +24,32 @@ Goal: build a reliable local chatbot before adding advanced features.
 
 ### LLM
 
-* [ ] Model selection in the UI
-* [ ] Support multiple Ollama models/tags
-* [ ] Streaming responses through the existing SSE path
-* [ ] Configurable temperature
-* [ ] Configurable generation parameters
-* [ ] Handle model loading/errors gracefully
-* [ ] Display the currently active model
+* [x] Model selection in the UI
+* [x] Support multiple Ollama models/tags
+* [x] Streaming responses through the existing SSE path
+* [x] Configurable temperature
+* [x] Configurable generation parameters
+* [x] Handle model loading/errors gracefully
+* [x] Display the currently active model
 
 ### Conversation
 
-* [ ] Persist conversations server-side
-* [ ] SQLite as the initial database
-* [ ] Conversation CRUD
-* [ ] Message CRUD
-* [ ] Correctly send conversation history to the LLM
-* [ ] Create a new conversation
-* [ ] Rename/delete conversations
-* [ ] Per-conversation isolation
+* [x] Persist conversations server-side
+* [x] Postgres as the initial database
+* [x] Conversation CRUD
+* [x] Message CRUD
+* [x] Correctly send conversation history to the LLM
+* [x] Create a new conversation
+* [x] Rename/delete conversations
+* [x] Per-conversation isolation
 
 ### System Prompt
 
-* [ ] Default system prompt
-* [ ] Per-conversation system prompt
-* [ ] Editable system prompt in the UI
-* [ ] Prompt presets
-* [ ] Display the active system prompt
+* [x] Default system prompt
+* [x] Per-conversation system prompt
+* [x] Editable system prompt in the UI
+* [x] Prompt presets
+* [x] Display the active system prompt
 
 ---
 

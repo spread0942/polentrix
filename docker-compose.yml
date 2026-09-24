@@ -16,6 +16,21 @@ services:
       - traefik.http.routers.dashboard.service=api@internal
       - traefik.http.routers.dashboard.entrypoints=web
 
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-polentrix}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-polentrix}
+      POSTGRES_DB: ${POSTGRES_DB:-polentrix}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   ollama:
     image: ollama/ollama:latest
     volumes:
@@ -56,7 +71,12 @@ services:
       PORT: "8080"
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:0.5b}
+      DATABASE_URL: postgres://${POSTGRES_USER:-polentrix}:${POSTGRES_PASSWORD:-polentrix}@db:5432/${POSTGRES_DB:-polentrix}?sslmode=disable
+      DEFAULT_SYSTEM_PROMPT: ${DEFAULT_SYSTEM_PROMPT:-You are Polentrix, a helpful local AI assistant.}
+      DEFAULT_TEMPERATURE: ${DEFAULT_TEMPERATURE:-0.7}
     depends_on:
+      db:
+        condition: service_healthy
       ollama:
         condition: service_healthy
       ollama-init:
@@ -81,3 +101,4 @@ services:
 
 volumes:
   ollama_data:
+  postgres_data:

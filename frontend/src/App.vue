@@ -1,15 +1,29 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { fetchHealth, streamChat } from './api'
+import { computed, nextTick, onMounted, ref } from 'vue'
+import {
+  createConversation,
+  createMessage,
+  deleteConversation,
+  fetchHealth,
+  getConversation,
+  listConversations,
+  patchConversation,
+  patchMessage,
+  streamChat,
+  type ApiConversation,
+  type ChatOptions,
+} from './api'
+import ChatSettings from './ChatSettings.vue'
 import ModelsSettings from './ModelsSettings.vue'
 import {
   type Chat,
-  createChat,
+  type Message,
+  clearLegacyChats,
+  DEFAULT_TEMPERATURE,
   loadActiveId,
-  loadChats,
+  loadLegacyChats,
   loadSelectedModel,
   saveActiveId,
-  saveChats,
   saveSelectedModel,
   titleFromMessage,
   uid,
@@ -19,9 +33,15 @@ const chats = ref<Chat[]>([])
 const activeId = ref<string | null>(null)
 const draft = ref('')
 const streaming = ref(false)
+const loading = ref(true)
 const error = ref<string | null>(null)
-const modelLabel = ref<string>('')
+const modelLabel = ref('')
 const view = ref<'chat' | 'models'>('chat')
+const showSettings = ref(false)
+const renamingId = ref<string | null>(null)
+const renameDraft = ref('')
+const defaultSystemPrompt = ref('You are Polentrix, a helpful local AI assistant.')
+const defaultTemperature = ref(DEFAULT_TEMPERATURE)
 const messagesEl = ref<HTMLElement | null>(null)
 let abort: AbortController | null = null
 
@@ -31,8 +51,30 @@ const sortedChats = computed(() =>
   [...chats.value].sort((a, b) => b.updatedAt - a.updatedAt),
 )
 
-function persist() {
-  saveChats(chats.value)
+function fromApi(c: ApiConversation): Chat {
+  return {
+    id: c.id,
+    title: c.title,
+    systemPrompt: c.system_prompt ?? '',
+    temperature: c.temperature,
+    topP: c.top_p,
+    numPredict: c.num_predict,
+    model: c.model ?? '',
+    createdAt: c.created_at,
+    updatedAt: c.updated_at,
+    messages: (c.messages ?? []).map(
+      (m): Message => ({
+        id: m.id,
+        role: m.role as Message['role'],
+        content: m.content,
+        createdAt: m.created_at,
+        position: m.position,
+      }),
+    ),
+  }
+}
+
+function persistActive() {
   saveActiveId(activeId.value)
 }
 
@@ -43,38 +85,140 @@ function scrollToBottom() {
   })
 }
 
-function newChat() {
-  const chat = createChat()
-  chats.value = [chat, ...chats.value]
+function chatOptions(chat: Chat): ChatOptions | undefined {
+  const opts: ChatOptions = {}
+  const temp = chat.temperature ?? defaultTemperature.value
+  if (temp != null) opts.temperature = temp
+  if (chat.topP != null) opts.top_p = chat.topP
+  if (chat.numPredict != null) opts.num_predict = chat.numPredict
+  return Object.keys(opts).length ? opts : undefined
+}
+
+function llmMessages(chat: Chat, excludeAssistantId?: string) {
+  const out: { role: string; content: string }[] = []
+  const system = (chat.systemPrompt || defaultSystemPrompt.value).trim()
+  if (system) {
+    out.push({ role: 'system', content: system })
+  }
+  for (const m of chat.messages) {
+    if (excludeAssistantId && m.id === excludeAssistantId) continue
+    if (m.role === 'system') continue
+    out.push({ role: m.role, content: m.content })
+  }
+  return out
+}
+
+async function refreshList() {
+  const list = await listConversations()
+  const detailed: Chat[] = []
+  for (const summary of list) {
+    const existing = chats.value.find((c) => c.id === summary.id)
+    if (existing && existing.id === activeId.value && existing.messages.length) {
+      detailed.push({
+        ...fromApi(summary),
+        messages: existing.messages,
+      })
+    } else if (summary.id === activeId.value) {
+      const full = await getConversation(summary.id)
+      detailed.push(fromApi(full))
+    } else {
+      detailed.push(fromApi(summary))
+    }
+  }
+  chats.value = detailed
+}
+
+async function ensureActiveLoaded() {
+  if (!activeId.value) return
+  const full = await getConversation(activeId.value)
+  const chat = fromApi(full)
+  const idx = chats.value.findIndex((c) => c.id === chat.id)
+  if (idx >= 0) chats.value[idx] = chat
+  else chats.value = [chat, ...chats.value]
+}
+
+async function newChat() {
+  const id = uid()
+  const created = await createConversation({
+    id,
+    title: 'New chat',
+    system_prompt: defaultSystemPrompt.value,
+    temperature: defaultTemperature.value,
+    model: modelLabel.value || undefined,
+  })
+  const chat = fromApi(created)
+  chats.value = [chat, ...chats.value.filter((c) => c.id !== chat.id)]
   activeId.value = chat.id
   draft.value = ''
   error.value = null
-  persist()
+  showSettings.value = false
+  persistActive()
 }
 
-function selectChat(id: string) {
+async function selectChat(id: string) {
   if (streaming.value) return
   activeId.value = id
   error.value = null
-  persist()
+  showSettings.value = false
+  persistActive()
+  try {
+    await ensureActiveLoaded()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to load chat'
+  }
 }
 
-function deleteChat(id: string) {
+async function deleteChat(id: string) {
   if (streaming.value) return
+  try {
+    await deleteConversation(id)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Delete failed'
+    return
+  }
   chats.value = chats.value.filter((c) => c.id !== id)
   if (activeId.value === id) {
     activeId.value = chats.value[0]?.id ?? null
     if (!activeId.value) {
-      newChat()
+      await newChat()
       return
     }
+    await ensureActiveLoaded()
   }
-  persist()
+  persistActive()
+}
+
+function startRename(chat: Chat) {
+  if (streaming.value) return
+  renamingId.value = chat.id
+  renameDraft.value = chat.title
+}
+
+async function commitRename() {
+  const id = renamingId.value
+  if (!id) return
+  const title = renameDraft.value.trim() || 'New chat'
+  renamingId.value = null
+  try {
+    const updated = await patchConversation(id, { title })
+    const chat = chats.value.find((c) => c.id === id)
+    if (chat) {
+      chat.title = updated.title
+      chat.updatedAt = updated.updated_at
+    }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Rename failed'
+  }
+}
+
+function cancelRename() {
+  renamingId.value = null
 }
 
 function openModels() {
   if (streaming.value) return
   view.value = 'models'
+  showSettings.value = false
 }
 
 function closeModels() {
@@ -86,13 +230,73 @@ function onSelectModel(name: string) {
   saveSelectedModel(name)
 }
 
+async function saveSettings(payload: {
+  title: string
+  systemPrompt: string
+  temperature: number | null
+  topP: number | null
+  numPredict: number | null
+}) {
+  const chat = activeChat.value
+  if (!chat) return
+  try {
+    const body: Record<string, unknown> = {
+      title: payload.title,
+      system_prompt: payload.systemPrompt,
+      temperature: payload.temperature,
+      top_p: payload.topP,
+      num_predict: payload.numPredict,
+    }
+    if (payload.topP == null) body.clear_top_p = true
+    if (payload.numPredict == null) body.clear_num_predict = true
+    const updated = await patchConversation(chat.id, body)
+    chat.title = updated.title
+    chat.systemPrompt = updated.system_prompt
+    chat.temperature = updated.temperature
+    chat.topP = updated.top_p
+    chat.numPredict = updated.num_predict
+    chat.updatedAt = updated.updated_at
+    showSettings.value = false
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to save settings'
+  }
+}
+
+async function migrateLegacyIfNeeded() {
+  const legacy = loadLegacyChats()
+  if (!legacy.length) return
+  for (const chat of legacy) {
+    try {
+      await createConversation({
+        id: chat.id,
+        title: chat.title,
+        system_prompt: chat.systemPrompt || defaultSystemPrompt.value,
+        temperature: chat.temperature ?? defaultTemperature.value,
+        top_p: chat.topP,
+        num_predict: chat.numPredict,
+        model: chat.model || modelLabel.value || undefined,
+      })
+      for (const m of chat.messages) {
+        await createMessage(chat.id, {
+          id: m.id,
+          role: m.role,
+          content: m.content,
+        })
+      }
+    } catch {
+      /* conversation may already exist */
+    }
+  }
+  clearLegacyChats()
+}
+
 async function send() {
   const text = draft.value.trim()
   if (!text || streaming.value) return
 
   let chat = activeChat.value
   if (!chat) {
-    newChat()
+    await newChat()
     chat = activeChat.value
   }
   if (!chat) return
@@ -100,17 +304,36 @@ async function send() {
   error.value = null
   draft.value = ''
 
-  const userMsg = { id: uid(), role: 'user' as const, content: text }
+  const userMsg: Message = { id: uid(), role: 'user', content: text }
   chat.messages.push(userMsg)
-  if (chat.messages.filter((m) => m.role === 'user').length === 1) {
+  const firstUser = chat.messages.filter((m) => m.role === 'user').length === 1
+  if (firstUser) {
     chat.title = titleFromMessage(text)
   }
   chat.updatedAt = Date.now()
 
+  try {
+    await createMessage(chat.id, { id: userMsg.id, role: 'user', content: text })
+    if (firstUser) {
+      await patchConversation(chat.id, { title: chat.title })
+    }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to save message'
+    chat.messages = chat.messages.filter((m) => m.id !== userMsg.id)
+    return
+  }
+
   const assistantId = uid()
   chat.messages.push({ id: assistantId, role: 'assistant', content: '' })
-  persist()
   scrollToBottom()
+
+  try {
+    await createMessage(chat.id, { id: assistantId, role: 'assistant', content: '' })
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to create assistant message'
+    chat.messages = chat.messages.filter((m) => m.id !== assistantId)
+    return
+  }
 
   const assistant = () => chat!.messages.find((m) => m.id === assistantId)
 
@@ -119,9 +342,7 @@ async function send() {
 
   try {
     await streamChat(
-      chat.messages
-        .filter((m) => m.id !== assistantId)
-        .map((m) => ({ role: m.role, content: m.content })),
+      llmMessages(chat, assistantId),
       (chunk) => {
         if (chunk.content) {
           const msg = assistant()
@@ -131,26 +352,42 @@ async function send() {
       },
       abort.signal,
       modelLabel.value || undefined,
+      chatOptions(chat),
     )
     const msg = assistant()
     if (msg && !msg.content) {
       msg.content = '(empty response)'
     }
+    if (msg) {
+      await patchMessage(chat.id, assistantId, msg.content)
+    }
   } catch (e) {
     const msg = assistant()
     if ((e as Error).name === 'AbortError') {
       if (msg && !msg.content) msg.content = '(stopped)'
+      if (msg) {
+        try {
+          await patchMessage(chat.id, assistantId, msg.content)
+        } catch {
+          /* ignore */
+        }
+      }
     } else {
       error.value = e instanceof Error ? e.message : 'Request failed'
       if (msg && !msg.content) {
         chat.messages = chat.messages.filter((m) => m.id !== assistantId)
+      } else if (msg) {
+        try {
+          await patchMessage(chat.id, assistantId, msg.content)
+        } catch {
+          /* ignore */
+        }
       }
     }
   } finally {
     streaming.value = false
     abort = null
     chat.updatedAt = Date.now()
-    persist()
     scrollToBottom()
   }
 }
@@ -166,57 +403,91 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-watch(chats, persist, { deep: true })
-
 onMounted(async () => {
-  chats.value = loadChats()
-  activeId.value = loadActiveId()
-  if (!chats.value.length) {
-    newChat()
-  } else if (!activeId.value || !chats.value.some((c) => c.id === activeId.value)) {
-    activeId.value = chats.value[0].id
-    persist()
-  }
+  loading.value = true
+  error.value = null
 
   const saved = loadSelectedModel()
-  if (saved) {
-    modelLabel.value = saved
-  }
+  if (saved) modelLabel.value = saved
 
   const health = await fetchHealth()
+  if (health?.default_system_prompt) {
+    defaultSystemPrompt.value = health.default_system_prompt
+  }
+  if (typeof health?.default_temperature === 'number') {
+    defaultTemperature.value = health.default_temperature
+  }
   if (!modelLabel.value && health?.model) {
     modelLabel.value = health.model
     saveSelectedModel(health.model)
+  }
+
+  try {
+    await migrateLegacyIfNeeded()
+    const list = await listConversations()
+    chats.value = list.map(fromApi)
+    activeId.value = loadActiveId()
+    if (!chats.value.length) {
+      await newChat()
+    } else {
+      if (!activeId.value || !chats.value.some((c) => c.id === activeId.value)) {
+        activeId.value = chats.value[0].id
+      }
+      persistActive()
+      await ensureActiveLoaded()
+    }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to load conversations'
+    if (!chats.value.length) {
+      /* keep empty; user can retry */
+    }
+  } finally {
+    loading.value = false
   }
 })
 </script>
 
 <template>
-  <div class="layout">
+  <div class="layout" :class="{ 'with-settings': showSettings && view === 'chat' }">
     <aside class="sidebar">
       <div class="sidebar-top">
         <div class="brand">Polentrix</div>
-        <button type="button" class="btn primary" :disabled="streaming" @click="newChat">
+        <button type="button" class="btn primary" :disabled="streaming || loading" @click="newChat">
           New chat
         </button>
       </div>
       <nav class="chat-list" aria-label="Chats">
-        <button
-          v-for="chat in sortedChats"
-          :key="chat.id"
-          type="button"
-          class="chat-item"
-          :class="{ active: chat.id === activeId && view === 'chat' }"
-          :disabled="streaming"
-          @click="selectChat(chat.id); closeModels()"
-        >
-          <span class="chat-title">{{ chat.title }}</span>
-          <span
-            class="chat-delete"
-            title="Delete"
-            @click.stop="deleteChat(chat.id)"
-          >×</span>
-        </button>
+        <div v-for="chat in sortedChats" :key="chat.id" class="chat-row">
+          <button
+            v-if="renamingId !== chat.id"
+            type="button"
+            class="chat-item"
+            :class="{ active: chat.id === activeId && view === 'chat' }"
+            :disabled="streaming"
+            @click="selectChat(chat.id); closeModels()"
+            @dblclick="startRename(chat)"
+          >
+            <span class="chat-title">{{ chat.title }}</span>
+            <span
+              class="chat-delete"
+              title="Delete"
+              @click.stop="deleteChat(chat.id)"
+            >×</span>
+          </button>
+          <form
+            v-else
+            class="rename-form"
+            @submit.prevent="commitRename"
+          >
+            <input
+              v-model="renameDraft"
+              type="text"
+              maxlength="120"
+              @keydown.escape="cancelRename"
+            />
+            <button type="submit" class="rename-ok" title="Save">✓</button>
+          </form>
+        </div>
       </nav>
       <div class="sidebar-foot">
         <div class="model-line">
@@ -255,56 +526,86 @@ onMounted(async () => {
       @select="onSelectModel"
     />
 
-    <main v-else class="main">
-      <header class="main-header">
-        <h1>{{ activeChat?.title ?? 'Chat' }}</h1>
-      </header>
-
-      <div ref="messagesEl" class="messages">
-        <div v-if="!activeChat?.messages.length" class="empty">
-          <p>Ask anything. Replies stream from your local Ollama model.</p>
-        </div>
-        <div
-          v-for="msg in activeChat?.messages ?? []"
-          :key="msg.id"
-          class="message"
-          :class="msg.role"
-        >
-          <div class="role">{{ msg.role === 'user' ? 'You' : 'Assistant' }}</div>
-          <div class="content">{{ msg.content || (streaming ? '…' : '') }}</div>
-        </div>
-      </div>
-
-      <div class="composer-wrap">
-        <p v-if="error" class="error">{{ error }}</p>
-        <div class="composer">
-          <textarea
-            v-model="draft"
-            rows="1"
-            placeholder="Message…"
-            :disabled="streaming"
-            @keydown="onKeydown"
-          />
+    <template v-else>
+      <main class="main">
+        <header class="main-header">
+          <h1>{{ activeChat?.title ?? 'Chat' }}</h1>
           <button
-            v-if="streaming"
             type="button"
-            class="btn danger"
-            @click="stop"
+            class="header-btn"
+            :disabled="!activeChat || streaming"
+            :class="{ active: showSettings }"
+            @click="showSettings = !showSettings"
           >
-            Stop
+            Prompt &amp; params
           </button>
-          <button
-            v-else
-            type="button"
-            class="btn primary"
-            :disabled="!draft.trim()"
-            @click="send"
+        </header>
+
+        <div ref="messagesEl" class="messages">
+          <div v-if="loading" class="empty">
+            <p>Loading conversations…</p>
+          </div>
+          <div v-else-if="!activeChat?.messages.length" class="empty">
+            <p>Ask anything. Replies stream from your local Ollama model.</p>
+            <p v-if="activeChat?.systemPrompt" class="prompt-hint">
+              System: {{ activeChat.systemPrompt }}
+            </p>
+          </div>
+          <div
+            v-for="msg in activeChat?.messages ?? []"
+            :key="msg.id"
+            class="message"
+            :class="msg.role"
           >
-            Send
-          </button>
+            <div class="role">{{ msg.role === 'user' ? 'You' : 'Assistant' }}</div>
+            <div class="content">{{ msg.content || (streaming ? '…' : '') }}</div>
+          </div>
         </div>
-      </div>
-    </main>
+
+        <div class="composer-wrap">
+          <p v-if="error" class="error">{{ error }}</p>
+          <div class="composer">
+            <textarea
+              v-model="draft"
+              rows="1"
+              placeholder="Message…"
+              :disabled="streaming || loading"
+              @keydown="onKeydown"
+            />
+            <button
+              v-if="streaming"
+              type="button"
+              class="btn danger"
+              @click="stop"
+            >
+              Stop
+            </button>
+            <button
+              v-else
+              type="button"
+              class="btn primary"
+              :disabled="!draft.trim() || loading"
+              @click="send"
+            >
+              Send
+            </button>
+          </div>
+        </div>
+      </main>
+
+      <ChatSettings
+        v-if="showSettings && activeChat"
+        :title="activeChat.title"
+        :system-prompt="activeChat.systemPrompt"
+        :temperature="activeChat.temperature"
+        :top-p="activeChat.topP"
+        :num-predict="activeChat.numPredict"
+        :default-temperature="defaultTemperature"
+        :default-system-prompt="defaultSystemPrompt"
+        @close="showSettings = false"
+        @save="saveSettings"
+      />
+    </template>
   </div>
 </template>
 
@@ -313,6 +614,10 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: 260px 1fr;
   height: 100%;
+}
+
+.layout.with-settings {
+  grid-template-columns: 260px 1fr min(360px, 100%);
 }
 
 .sidebar {
@@ -344,6 +649,10 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+}
+
+.chat-row {
+  min-width: 0;
 }
 
 .chat-item {
@@ -392,6 +701,33 @@ onMounted(async () => {
 
 .chat-delete:hover {
   color: var(--danger);
+}
+
+.rename-form {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+}
+
+.rename-form input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+  color: var(--text);
+  outline: none;
+  font-size: 0.85rem;
+}
+
+.rename-ok {
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 6px;
+  padding: 0 0.55rem;
+  font-weight: 700;
 }
 
 .sidebar-foot {
@@ -462,6 +798,10 @@ onMounted(async () => {
 .main-header {
   padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
 .main-header h1 {
@@ -469,6 +809,31 @@ onMounted(async () => {
   font-size: 1rem;
   font-weight: 600;
   color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-btn {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  border-radius: 8px;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.header-btn:hover:not(:disabled),
+.header-btn.active {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.header-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .messages {
@@ -485,6 +850,13 @@ onMounted(async () => {
   text-align: center;
   color: var(--text-muted);
   max-width: 28rem;
+}
+
+.prompt-hint {
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  opacity: 0.85;
+  font-family: var(--mono);
 }
 
 .message {
@@ -578,8 +950,16 @@ onMounted(async () => {
   color: #fff;
 }
 
+@media (max-width: 900px) {
+  .layout.with-settings {
+    grid-template-columns: 260px 1fr;
+    grid-template-rows: auto 1fr auto;
+  }
+}
+
 @media (max-width: 720px) {
-  .layout {
+  .layout,
+  .layout.with-settings {
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr;
   }

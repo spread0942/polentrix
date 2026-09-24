@@ -3,12 +3,14 @@ package handlers
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/polentrix/backend/internal/ollama"
+	"github.com/polentrix/backend/internal/store"
 )
 
 // Suggested catalog shown in the UI; downloaded tags not in this list are still included.
@@ -24,13 +26,45 @@ var suggestedModels = []string{
 	"mistral:7b",
 }
 
-type Handler struct {
-	client *ollama.Client
-	model  string
+var promptPresets = []map[string]string{
+	{
+		"id":     "default",
+		"name":   "Default",
+		"prompt": "You are Polentrix, a helpful local AI assistant.",
+	},
+	{
+		"id":     "concise",
+		"name":   "Concise",
+		"prompt": "You are Polentrix. Answer clearly and briefly. Avoid filler.",
+	},
+	{
+		"id":     "coder",
+		"name":   "Coding",
+		"prompt": "You are Polentrix, a careful coding assistant. Prefer correct, minimal code. Explain briefly when helpful.",
+	},
+	{
+		"id":     "italian",
+		"name":   "Italiano",
+		"prompt": "Sei Polentrix, un assistente AI locale. Rispondi sempre in italiano, in modo chiaro e cordiale.",
+	},
 }
 
-func New(client *ollama.Client, model string) *Handler {
-	return &Handler{client: client, model: model}
+type Handler struct {
+	client              *ollama.Client
+	store               *store.Store
+	model               string
+	defaultSystemPrompt string
+	defaultTemperature  float64
+}
+
+func New(client *ollama.Client, st *store.Store, model, defaultSystemPrompt string, defaultTemperature float64) *Handler {
+	return &Handler{
+		client:              client,
+		store:               st,
+		model:               model,
+		defaultSystemPrompt: defaultSystemPrompt,
+		defaultTemperature:  defaultTemperature,
+	}
 }
 
 type catalogModel struct {
@@ -41,10 +75,25 @@ type catalogModel struct {
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
-		"status": "ok",
-		"model":  h.model,
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":              "ok",
+		"model":               h.model,
+		"default_system_prompt": h.defaultSystemPrompt,
+		"default_temperature": h.defaultTemperature,
 	})
+}
+
+func (h *Handler) PromptPresets(w http.ResponseWriter, r *http.Request) {
+	presets := make([]map[string]string, len(promptPresets))
+	copy(presets, promptPresets)
+	if h.defaultSystemPrompt != "" {
+		presets[0] = map[string]string{
+			"id":     "default",
+			"name":   "Default",
+			"prompt": h.defaultSystemPrompt,
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"presets": presets})
 }
 
 func (h *Handler) Models(w http.ResponseWriter, r *http.Request) {
@@ -57,7 +106,6 @@ func (h *Handler) Models(w http.ResponseWriter, r *http.Request) {
 	installed := make(map[string]ollama.ModelInfo, len(list.Models))
 	for _, m := range list.Models {
 		installed[m.Name] = m
-		// Also index without :latest suffix for matching.
 		if strings.HasSuffix(m.Name, ":latest") {
 			installed[strings.TrimSuffix(m.Name, ":latest")] = m
 		}
@@ -178,6 +226,7 @@ func (h *Handler) PullModel(w http.ResponseWriter, r *http.Request) {
 type chatBody struct {
 	Messages []ollama.Message `json:"messages"`
 	Model    string           `json:"model,omitempty"`
+	Options  *ollama.Options  `json:"options,omitempty"`
 }
 
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +245,13 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		model = body.Model
 	}
 
-	stream, err := h.client.ChatStream(r.Context(), model, body.Messages)
+	opts := body.Options
+	if opts == nil && h.defaultTemperature > 0 {
+		t := h.defaultTemperature
+		opts = &ollama.Options{Temperature: &t}
+	}
+
+	stream, err := h.client.ChatStream(r.Context(), model, body.Messages, opts)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
@@ -230,7 +285,12 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if chunk.Error != "" {
-			fmt.Fprintf(w, "data: %s\n\n", mustJSON(map[string]string{"error": chunk.Error}))
+			msg := chunk.Error
+			lower := strings.ToLower(msg)
+			if strings.Contains(lower, "not found") || strings.Contains(lower, "pull model") {
+				msg = fmt.Sprintf("model %q is not available — pull it in Model settings first", model)
+			}
+			fmt.Fprintf(w, "data: %s\n\n", mustJSON(map[string]string{"error": msg}))
 			flusher.Flush()
 			break
 		}
@@ -269,4 +329,12 @@ func mustJSON(v any) []byte {
 		return []byte(`{"error":"marshal failed"}`)
 	}
 	return b
+}
+
+func writeStoreError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 }

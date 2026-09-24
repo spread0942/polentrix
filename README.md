@@ -6,12 +6,13 @@ Local ChatGPT-style chatbot powered by [Ollama](https://ollama.com/), with a Vue
 
 | Piece | Role |
 |-------|------|
-| **web** (Vue 3 + Vite) | Chat UI — chat list, new chat, streaming messages |
-| **api** (Go) | Thin proxy — SSE streaming from Ollama |
+| **web** (Vue 3 + Vite) | Chat UI — chat list, streaming, model/prompt settings |
+| **api** (Go) | SSE proxy to Ollama + Postgres conversation store |
+| **db** (Postgres) | Conversations and messages |
 | **ollama** | Local LLM runtime |
 | **ollama-init** | Pulls the default model on first start |
 
-No database and no worker in v1. Chats live in the browser (`localStorage`). Add SQLite/Postgres later when you want sync or multi-user; add a worker only for async jobs (embeddings, file ingest, etc.).
+Conversations and messages are stored in Postgres (`DATABASE_URL`). The UI migrates any older `localStorage` chats once on first load.
 
 ## Requirements
 
@@ -107,7 +108,7 @@ polentrix/
 
 ## Later
 
-- Persist chats in SQLite/Postgres via the Go API
+- Persist chats in Postgres via the Go API
 - Auth / multi-user
 - Worker for RAG or file processing
 - Larger Qwen (or other) models as your hardware allows
